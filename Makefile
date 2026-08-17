@@ -1,5 +1,5 @@
 GO_BUILD_ENV := CGO_ENABLED=0
-GO_BUILD_FLAGS := -ldflags="-s -w"
+GO_BUILD_FLAGS := -trimpath -ldflags="-s -w"
 MODULE_BINARY := bin/viam-ntp
 
 # Viam cloud build sets VIAM_TARGET_OS per target platform
@@ -9,7 +9,7 @@ MODULE_BINARY := bin/viam-ntp
 # see fix-meta-for-win below.
 ifeq ($(VIAM_TARGET_OS), windows)
 	GO_BUILD_ENV += GOOS=windows GOARCH=amd64
-	GO_BUILD_FLAGS := -ldflags="-s -w" -tags no_cgo
+	GO_BUILD_FLAGS := -trimpath -ldflags="-s -w" -tags no_cgo
 	MODULE_BINARY = bin/viam-ntp.exe
 endif
 
@@ -74,7 +74,7 @@ setup:
 clean:
 	rm -rf bin module.tar.gz
 
-VERSION ?= 0.0.1
+VERSION ?= 0.0.2
 
 # Build every arch, then print the upload commands. Override the version with
 # e.g. `make upload VERSION=1.2.3`.
