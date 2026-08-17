@@ -1,0 +1,30 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "viam:viam-ntp",
+  "visibility": "public",
+  "url": "https://github.com/viam-soleng/viam-ntp",
+  "description": "Sets the host system clock from NTP.",
+  "models": [
+    {
+      "api": "rdk:service:generic",
+      "model": "viam:viam-ntp:update",
+      "short_description": "Queries pool.ntp.org hourly and steps the host system clock",
+      "markdown_link": "viam_viam-ntp_update.md"
+    }
+  ],
+  "applications": null,
+  "markdown_link": "README.md",
+  "entrypoint": "bin/viam-ntp",
+  "first_run": "",
+  "build": {
+    "build": "make module.tar.gz",
+    "setup": "make setup",
+    "path": "module.tar.gz",
+    "arch": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/arm64",
+      "windows/amd64"
+    ]
+  }
+}
