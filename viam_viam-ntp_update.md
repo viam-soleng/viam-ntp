@@ -2,7 +2,7 @@
 
 A generic service that queries `pool.ntp.org` over SNTP and steps the host's system clock, hourly and on demand. The server, the one-hour interval, the 5s timeout, and the 100ms threshold below which a correction is not worth applying are all fixed.
 
-The background loop always runs; `sync_on_start` only controls whether the first check happens immediately instead of an hour in.
+The background loop always runs; `sync_on_start` only controls whether the first check happens immediately instead of an hour in. A failed check (e.g. at boot, before the network is up) is retried after 15s, then 30s, 1m and so on up to the hour, instead of waiting the full hour.
 
 Changing the clock needs privileges: root on Linux (or `CAP_SYS_TIME`) and macOS, Administrator on Windows. Without them `query` and `status` still work and `update` fails with a clear error. Check `can_set_clock` in `status` to see where you stand.
 
@@ -27,6 +27,7 @@ Clock writes work on every platform the module builds for:
 | Name            | Type | Inclusion | Default | Description                                                      |
 |-----------------|------|-----------|---------|------------------------------------------------------------------|
 | `sync_on_start` | bool | Optional  | `false` | Run one update immediately at startup, ahead of the hourly loop. |
+| `hw_sync`       | bool | Optional  | `false` | After each successful update or `set_time`, write the time to the hardware clock (RTC, as UTC), so the next boot starts from the right time. Linux only. |
 
 ### Example Configuration
 
@@ -35,6 +36,15 @@ Keep a Raspberry Pi with no RTC on time from boot:
 ```json
 {
   "sync_on_start": true
+}
+```
+
+On a machine with an RTC (e.g. a Raspberry Pi with a battery), also keep the RTC right:
+
+```json
+{
+  "sync_on_start": true,
+  "hw_sync": true
 }
 ```
 
@@ -90,7 +100,7 @@ Supply either `time` (RFC3339) or `unix` (epoch seconds). `dry_run` is honored.
 {"status": {}}
 ```
 
-Returns the current `system_time` / `local_time` / `timezone`, the `server`, `sync_interval`, `can_set_clock` (does this process hold the privilege to write the clock), and `last_sync` — the result of the most recent attempt, whether from the loop or a command, including any error. `last_sync` is `null` until the first attempt.
+Returns the current `system_time` / `local_time` / `timezone`, the `server`, `sync_interval`, `sync_on_start`, `hw_sync`, `can_set_clock` (does this process hold the privilege to write the clock), and `last_sync` — the result of the most recent attempt, whether from the loop or a command, including any error. `last_sync` is `null` until the first attempt.
 
 ## Command line
 

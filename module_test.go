@@ -57,7 +57,7 @@ func newTestService(t *testing.T, cfg *Config, server string) *viamNtpUpdate {
 
 func newTestServiceEvery(t *testing.T, cfg *Config, server string, interval time.Duration) *viamNtpUpdate {
 	t.Helper()
-	svc, err := newService(genericservice.Named("ntp"), cfg, logging.NewTestLogger(t), server, interval)
+	svc, err := newService(genericservice.Named("ntp"), cfg, logging.NewTestLogger(t), server, interval, interval)
 	test.That(t, err, test.ShouldBeNil)
 	t.Cleanup(func() { test.That(t, svc.Close(context.Background()), test.ShouldBeNil) })
 	return svc
@@ -214,11 +214,55 @@ func TestSyncOnStart(t *testing.T) {
 	test.That(t, last.Err, test.ShouldBeEmpty)
 }
 
+// A failed check must be retried soon, not an interval later.
+func TestRetriesSoonAfterFailure(t *testing.T) {
+	svc, err := newService(genericservice.Named("ntp"), &Config{SyncOnStart: true},
+		logging.NewTestLogger(t), "127.0.0.1:1", time.Hour, 10*time.Millisecond)
+	test.That(t, err, test.ShouldBeNil)
+	t.Cleanup(func() { test.That(t, svc.Close(context.Background()), test.ShouldBeNil) })
+
+	first := waitForSync(t, svc)
+	test.That(t, first.Err, test.ShouldNotBeEmpty)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		svc.mu.Lock()
+		last := svc.lastSync
+		svc.mu.Unlock()
+		if last != first {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("the failed sync was not retried before the deadline")
+}
+
+// hw_sync must write the hardware clock after an update, but not on a dry run.
+func TestHWSync(t *testing.T) {
+	addr := fakeNTPServer(t, 0)
+	for _, on := range []bool{false, true} {
+		svc := newTestService(t, &Config{HWSync: on}, addr)
+		var written []time.Time
+		svc.setRTC = func(t time.Time) error { written = append(written, t); return nil }
+
+		_, err := svc.DoCommand(context.Background(), map[string]interface{}{"update": map[string]interface{}{}})
+		test.That(t, err, test.ShouldBeNil)
+		_, err = svc.DoCommand(context.Background(), map[string]interface{}{"update": map[string]interface{}{"dry_run": true}})
+		test.That(t, err, test.ShouldBeNil)
+
+		if on {
+			test.That(t, len(written), test.ShouldEqual, 1)
+			test.That(t, abs(time.Since(written[0])) < time.Second, test.ShouldBeTrue)
+		} else {
+			test.That(t, written, test.ShouldBeEmpty)
+		}
+	}
+}
+
 // Close must stop the loop and return promptly.
 func TestCloseStopsLoop(t *testing.T) {
 	addr := fakeNTPServer(t, 0)
 	svc, err := newService(genericservice.Named("ntp"), &Config{SyncOnStart: true},
-		logging.NewTestLogger(t), addr, 10*time.Millisecond)
+		logging.NewTestLogger(t), addr, 10*time.Millisecond, 10*time.Millisecond)
 	test.That(t, err, test.ShouldBeNil)
 
 	done := make(chan error, 1)
