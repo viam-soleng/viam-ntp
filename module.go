@@ -26,6 +26,8 @@ const (
 	minOffset = 100 * time.Millisecond
 	// How often the background loop re-checks the clock.
 	syncInterval = time.Hour
+	// How soon a failed check is retried, doubling up to syncInterval.
+	retryInterval = 15 * time.Second
 )
 
 func init() {
@@ -40,6 +42,8 @@ func init() {
 type Config struct {
 	// SyncOnStart runs one update as soon as the service starts.
 	SyncOnStart bool `json:"sync_on_start,omitempty"`
+	// HWSync writes the time to the hardware clock (RTC) after each successful update.
+	HWSync bool `json:"hw_sync,omitempty"`
 }
 
 // Validate ensures all parts of the config are valid and important fields exist.
@@ -72,6 +76,8 @@ type viamNtpUpdate struct {
 
 	server   string
 	interval time.Duration
+	retry    time.Duration
+	setRTC   func(time.Time) error
 
 	cancelCtx  context.Context
 	cancelFunc func()
@@ -92,13 +98,13 @@ func newViamNtpUpdate(ctx context.Context, deps resource.Dependencies, rawConf r
 
 // NewUpdate builds the service directly, for use from the CLI harness.
 func NewUpdate(ctx context.Context, deps resource.Dependencies, name resource.Name, conf *Config, logger logging.Logger) (resource.Resource, error) {
-	return newService(name, conf, logger, defaultServer, syncInterval)
+	return newService(name, conf, logger, defaultServer, syncInterval, retryInterval)
 }
 
 // newService is the real constructor. Tests call it with a local fake server
-// and a short interval; everything else gets the fixed production values.
+// and short intervals; everything else gets the fixed production values.
 func newService(name resource.Name, conf *Config, logger logging.Logger,
-	server string, interval time.Duration,
+	server string, interval, retry time.Duration,
 ) (*viamNtpUpdate, error) {
 	cancelCtx, cancelFunc := context.WithCancel(context.Background())
 
@@ -109,6 +115,8 @@ func newService(name resource.Name, conf *Config, logger logging.Logger,
 		cfg:        conf,
 		server:     server,
 		interval:   interval,
+		retry:      retry,
+		setRTC:     setHardwareClock,
 		cancelCtx:  cancelCtx,
 		cancelFunc: cancelFunc,
 	}
@@ -117,39 +125,42 @@ func newService(name resource.Name, conf *Config, logger logging.Logger,
 		logger.Warn("Insufficient privileges to set the system clock; run viam-server as root (Administrator on Windows)")
 	}
 
-	if conf.SyncOnStart {
-		s.workers.Add(1)
-		go func() {
-			defer s.workers.Done()
-			if _, err := s.sync(false, false); err != nil {
-				logger.Errorw("Startup time sync failed", "error", err)
-			}
-		}()
-	}
-
 	s.workers.Add(1)
 	go s.syncLoop()
 
 	return s, nil
 }
 
-// syncLoop re-checks the clock on a fixed interval until the service closes.
+// syncLoop re-checks the clock on a fixed interval until the service closes,
+// sooner after a failed check.
 func (s *viamNtpUpdate) syncLoop() {
 	defer s.workers.Done()
 
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-
 	s.logger.Infow("Starting background time sync", "interval", s.interval.String(), "server", s.server)
+
+	wait := s.interval
+	if s.cfg.SyncOnStart {
+		wait = 0
+	}
+	retry := s.retry
+
 	for {
 		select {
 		case <-s.cancelCtx.Done():
 			return
-		case <-ticker.C:
-			if _, err := s.sync(false, false); err != nil {
-				s.logger.Errorw("Scheduled time sync failed", "error", err)
-			}
+		case <-time.After(wait):
 		}
+
+		if _, err := s.sync(false, false); err != nil {
+			// e.g. at boot, before the network is up: try again soon, waiting longer each time
+			wait = min(retry, s.interval)
+			retry = min(retry*2, s.interval)
+			s.logger.Errorw("Time sync failed", "error", err, "retry_in", wait.String())
+			continue
+		}
+
+		wait = s.interval
+		retry = s.retry
 	}
 }
 
@@ -195,26 +206,39 @@ func (s *viamNtpUpdate) sync(force, dryRun bool) (map[string]interface{}, error)
 	case dryRun:
 		s.logger.Infow("Dry run: not changing the clock", "offset", offset.String())
 		return skip("dry_run")
-	case !force && abs(offset) < minOffset:
+	case force || abs(offset) >= minOffset:
+		target := time.Now().Add(offset)
+		if err := setSystemTime(target); err != nil {
+			err = fmt.Errorf("Failed to set the system clock (needs root/CAP_SYS_TIME): %w", err)
+			rec.Err = err.Error()
+			s.record(rec)
+			return nil, err
+		}
+		s.logger.Infow("Stepped the system clock", "offset", offset.String(), "server", res.Server,
+			"new_time", target.UTC().Format(time.RFC3339Nano))
+		rec.Applied = true
+	}
+
+	// The system clock now matches NTP, whether it was just stepped or already close enough.
+	s.syncHardwareClock()
+
+	if !rec.Applied {
 		return skip(fmt.Sprintf("offset %s is below the %s threshold", offset, minOffset))
 	}
-
-	target := time.Now().Add(offset)
-	if err := setSystemTime(target); err != nil {
-		err = fmt.Errorf("Failed to set the system clock (needs root/CAP_SYS_TIME): %w", err)
-		rec.Err = err.Error()
-		s.record(rec)
-		return nil, err
-	}
-
-	s.logger.Infow("Stepped the system clock", "offset", offset.String(), "server", res.Server,
-		"new_time", target.UTC().Format(time.RFC3339Nano))
-
-	rec.Applied = true
 	s.record(rec)
 	out["applied"] = true
 	out["system_time"] = time.Now().UTC().Format(time.RFC3339Nano)
 	return out, nil
+}
+
+// syncHardwareClock copies the system clock to the RTC when hw_sync is on.
+func (s *viamNtpUpdate) syncHardwareClock() {
+	if !s.cfg.HWSync {
+		return
+	}
+	if err := s.setRTC(time.Now()); err != nil {
+		s.logger.Warnw("Failed to set the hardware clock", "error", err)
+	}
 }
 
 func (s *viamNtpUpdate) record(rec *syncRecord) {
@@ -319,6 +343,7 @@ func (s *viamNtpUpdate) doSetTime(args map[string]interface{}) (map[string]inter
 		return nil, fmt.Errorf("failed to set the system clock (needs root/CAP_SYS_TIME): %w", err)
 	}
 	s.logger.Infow("Set the system clock explicitly", "new_time", target.UTC().Format(time.RFC3339Nano))
+	s.syncHardwareClock()
 	s.record(&syncRecord{At: time.Now().UTC(), Offset: offset, Applied: true})
 
 	out["applied"] = true
@@ -342,6 +367,7 @@ func (s *viamNtpUpdate) Status(ctx context.Context) (map[string]interface{}, err
 		"server":              s.server,
 		"sync_interval":       s.interval.String(),
 		"sync_on_start":       s.cfg.SyncOnStart,
+		"hw_sync":             s.cfg.HWSync,
 		"can_set_clock":       canSetClock(),
 	}
 

@@ -3,6 +3,7 @@
 package viamntp
 
 import (
+	"errors"
 	"fmt"
 	"time"
 	"unsafe"
@@ -85,4 +86,9 @@ func enableSystemTimePrivilege() error {
 			seSystemtimePrivilege)
 	}
 	return nil
+}
+
+// setHardwareClock is only implemented on Linux.
+func setHardwareClock(time.Time) error {
+	return errors.New("hw_sync is only supported on Linux")
 }
