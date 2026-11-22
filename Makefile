@@ -1,15 +1,15 @@
 GO_BUILD_ENV := CGO_ENABLED=0
-GO_BUILD_FLAGS := -trimpath -ldflags="-s -w"
+# CGO is disabled, so every build needs the no_cgo tag: RDK otherwise pulls in
+# cgo-only drivers (e.g. pion/mediadevices microphone via malgo).
+GO_BUILD_FLAGS := -trimpath -ldflags="-s -w" -tags no_cgo
 MODULE_BINARY := bin/viam-ntp
 
 # Viam cloud build sets VIAM_TARGET_OS per target platform
-# Windows is cross-compiled and needs a .exe suffix plus a
-# CGO-free build. viam-server resolves the entrypoint from the meta.json,
+# Windows is cross-compiled and needs a .exe suffix. viam-server resolves the entrypoint from the meta.json,
 # so the Windows tarball must ship a meta.json whose entrypoint names the .exe
 # see fix-meta-for-win below.
 ifeq ($(VIAM_TARGET_OS), windows)
 	GO_BUILD_ENV += GOOS=windows GOARCH=amd64
-	GO_BUILD_FLAGS := -trimpath -ldflags="-s -w" -tags no_cgo
 	MODULE_BINARY = bin/viam-ntp.exe
 endif
 
@@ -52,11 +52,11 @@ packages: bin/linux-amd64/module.tar.gz bin/linux-arm64/module.tar.gz bin/darwin
 
 bin/%/module.tar.gz: Makefile go.mod *.go cmd/module/*.go meta.json
 	@set -e; os=$$(echo $* | cut -d- -f1); arch=$$(echo $* | cut -d- -f2); \
-	  workdir=bin/$*; bin=viam-ntp; ext=""; tags=""; \
-	  if [ "$$os" = "windows" ]; then ext=".exe"; tags="-tags no_cgo"; fi; \
+	  workdir=bin/$*; bin=viam-ntp; ext=""; \
+	  if [ "$$os" = "windows" ]; then ext=".exe"; fi; \
 	  mkdir -p $$workdir/bin; \
 	  echo ">> building $$os/$$arch -> $$workdir/bin/$$bin$$ext"; \
-	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) $$tags -o $$workdir/bin/$$bin$$ext ./cmd/module; \
+	  GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 go build $(GO_BUILD_FLAGS) -o $$workdir/bin/$$bin$$ext ./cmd/module; \
 	  if [ "$$os" = "windows" ]; then \
 	    jq '.entrypoint = "bin/'$$bin'.exe"' meta.json > $$workdir/meta.json; \
 	  else \
