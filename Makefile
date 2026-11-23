@@ -48,7 +48,7 @@ fix-meta-for-win:
 # one tarball per arch at bin/<goos>-<goarch>/module.tar.gz, ready for `make upload`.
 # Each tarball contains `bin/viam-ntp` and `meta.json` at the top level,
 # matching the entrypoint path declared in meta.json
-packages: bin/linux-amd64/module.tar.gz bin/linux-arm64/module.tar.gz bin/darwin-arm64/module.tar.gz bin/windows-amd64/module.tar.gz
+packages: bin/linux-amd64/module.tar.gz bin/linux-arm64/module.tar.gz bin/linux-riscv64/module.tar.gz bin/darwin-arm64/module.tar.gz bin/windows-amd64/module.tar.gz
 
 bin/%/module.tar.gz: Makefile go.mod *.go cmd/module/*.go meta.json
 	@set -e; os=$$(echo $* | cut -d- -f1); arch=$$(echo $* | cut -d- -f2); \
@@ -81,5 +81,6 @@ VERSION ?= 0.0.3
 upload: packages
 	@echo viam module upload --version \"$(VERSION)\" --platform \"linux/amd64\" bin/linux-amd64/module.tar.gz
 	@echo viam module upload --version \"$(VERSION)\" --platform \"linux/arm64\" bin/linux-arm64/module.tar.gz
+	@echo viam module upload --version \"$(VERSION)\" --platform \"linux/riscv64\" bin/linux-riscv64/module.tar.gz
 	@echo viam module upload --version \"$(VERSION)\" --platform \"darwin/arm64\" bin/darwin-arm64/module.tar.gz
 	@echo viam module upload --version \"$(VERSION)\" --platform \"windows/amd64\" bin/windows-amd64/module.tar.gz

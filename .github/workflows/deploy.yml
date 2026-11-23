@@ -15,3 +15,22 @@ jobs:
           key-id: ${{ secrets.viam_key_id }}
           key-value: ${{ secrets.viam_key_value }}
           token: ${{ github.token }}
+
+      # Viam cloud build has no linux/riscv64 builder, so cross-compile that
+      # platform here and upload it to the same registry version.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build linux/riscv64 package
+        run: make bin/linux-riscv64/module.tar.gz
+
+      - name: Upload linux/riscv64 package
+        env:
+          VIAM_KEY_ID: ${{ secrets.viam_key_id }}
+          VIAM_KEY_VALUE: ${{ secrets.viam_key_value }}
+        run: |
+          curl -fsSL -o viam https://storage.googleapis.com/packages.viam.com/apps/viam-cli/viam-cli-stable-linux-amd64
+          chmod +x viam
+          ./viam login api-key --key-id "$VIAM_KEY_ID" --key "$VIAM_KEY_VALUE"
+          ./viam module upload --version "${{ github.ref_name }}" --platform "linux/riscv64" --upload bin/linux-riscv64/module.tar.gz
